@@ -40,6 +40,11 @@ pub(crate) struct Host {
     density: Density,
     trace: bool,
     engine: Mutex<Option<Engine>>,
+    /// The links the system opened the app with before its engine ran
+    /// (the launch intent's is handed in from `onCreate`, ahead of the
+    /// app): given to the engine as it starts, whose core keeps them until
+    /// the app listens.
+    url_schemes: Mutex<Vec<EventPayload>>,
     /// The running engine's control, for answers the sink gives itself
     /// (never locked while an engine stops, unlike `engine`).
     answers: Mutex<Option<EngineControl>>,
@@ -112,8 +117,13 @@ impl Host {
 
     /// Hands event `kind` of node `id` to the running app.
     pub(crate) fn dispatch(&self, id: NodeId, kind: EventKind, payload: EventPayload) {
-        if let Some(control) = self.control() {
-            control.dispatch_event(id, kind, payload);
+        match self.control() {
+            Some(control) => control.dispatch_event(id, kind, payload),
+            // The link that launched the app comes before the app runs.
+            None if kind == EventKind::UrlScheme => {
+                self.url_schemes.lock().expect("url schemes").push(payload);
+            }
+            None => {}
         }
     }
 
@@ -234,7 +244,11 @@ impl Host {
                     model.engine_started(engine.control());
                 }
                 *self.answers.lock().expect("answers") = Some(engine.control());
+                let control = engine.control();
                 *self.engine.lock().expect("engine") = Some(engine);
+                for url in std::mem::take(&mut *self.url_schemes.lock().expect("url schemes")) {
+                    control.dispatch_event(nsh_core::ROOT_ID, EventKind::UrlScheme, url);
+                }
             }
             Err(err) => log::error!("failed to start the engine: {err}"),
         }
@@ -554,6 +568,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_create(
         density: Density::new(density),
         trace: trace != 0,
         engine: Mutex::new(None),
+        url_schemes: Mutex::new(Vec::new()),
         answers: Mutex::new(None),
         pending: Mutex::new(None),
         viewport: Mutex::new(Size::new(px(0.0), px(0.0))),
