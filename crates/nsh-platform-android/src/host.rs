@@ -1667,9 +1667,8 @@ extern "system" fn Java_com_longbridge_nsh_Native_eventMap(
             EventPayload::Map(fields)
         }
     };
-    if let Some(control) = host.control() {
-        control.dispatch_event(id as NodeId, kind, payload);
-    }
+    // Through the host: a link that comes before the engine is kept.
+    host.dispatch(id as NodeId, kind, payload);
 }
 
 /// Applies the animation items of batches up to `seq` (already applied by
