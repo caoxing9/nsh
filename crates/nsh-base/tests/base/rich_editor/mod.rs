@@ -45,7 +45,28 @@ impl NodeView for StockCard {
     }
 }
 
-/// The starter schema with a block atom `stock` and Tiptap's `mention`.
+/// An inline node view that says whether it is selected.
+struct Chip;
+
+impl NodeView for Chip {
+    fn create(&self, cx: &NodeViewCx, _node: &Node) -> AnyElement {
+        let selected = cx.selected();
+        view()
+            .w(px(40.0))
+            .h(px(16.0))
+            .child(text(move || {
+                if selected.get() {
+                    "Chip held"
+                } else {
+                    "Chip free"
+                }
+            }))
+            .into_element()
+    }
+}
+
+/// The starter schema with a block atom `stock`, Tiptap's `mention` and
+/// an inline atom `chip` a node selection may hold.
 fn schema() -> Schema {
     let mut spec = starter::schema_spec();
     let mut stock = NodeSpec::default();
@@ -56,6 +77,11 @@ fn schema() -> Schema {
     stock.attrs = vec![("symbol".into(), symbol)];
     spec.nodes.push(("stock".into(), stock));
     spec.nodes.push(mention_node("mention", "@"));
+    let mut chip = NodeSpec::default();
+    chip.group = Some("inline".into());
+    chip.inline = true;
+    chip.atom = true;
+    spec.nodes.push(("chip".into(), chip));
     Schema::new(spec).unwrap()
 }
 
@@ -66,7 +92,9 @@ fn session(doc: Value) -> EditorSession {
     let doc = schema.node_from_json(&doc).unwrap();
     let state =
         EditorState::create(EditorStateConfig::new(schema).doc(doc).plugins(plugins)).unwrap();
-    EditorSession::new(state, NodeViews::new().with("stock", Arc::new(StockCard)))
+    EditorSession::new(state, NodeViews::new()
+            .with("stock", Arc::new(StockCard))
+            .with("chip", Arc::new(Chip)))
 }
 
 #[derive(Clone, PartialEq, Props)]

@@ -1048,11 +1048,24 @@ fn leaf(rv: &Rv, node: Node, pos: usize, drawn: Option<String>) -> AnyElement {
     };
     if let Some(view) = rv.node_view(node.ty().name()) {
         let get_pos: Rc<dyn Fn() -> Option<usize>> = Rc::new(move || Some(pos));
+        // Selected as a block's view is: while a node selection holds it.
+        let selected = signal(false);
+        {
+            let rv = rv.clone();
+            effect(move || {
+                rv.sel_rev.get();
+                let held = {
+                    let state = rv.st.borrow();
+                    state.selection().as_node().is_some() && state.selection().from() == pos
+                };
+                selected.set(held);
+            });
+        }
         let cx = NodeViewCx::new(
             rv.session.clone(),
             get_pos,
             signal(node.clone()).read_only(),
-            signal(false).read_only(),
+            selected.read_only(),
             signal(Vec::new()).read_only(),
             None,
         );

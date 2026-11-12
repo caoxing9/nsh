@@ -59,6 +59,36 @@ fn a_mention_shows_its_text_and_is_one_position() {
 }
 
 #[test]
+fn an_arrow_stops_on_an_inline_node_and_selects_it() {
+    let mut app = start(json!({"type": "doc", "content": [
+        {"type": "paragraph", "content": [
+            {"type": "text", "text": "a"},
+            {"type": "chip"},
+            {"type": "text", "text": "b"},
+        ]},
+    ]}));
+    app.wait_for("text:Chip free").unwrap();
+    focus_start(&mut app);
+    // `a` is 1..2, the chip 2..3: the arrow that reaches it holds it, and
+    // its view hears so.
+    keys(&mut app, &["right", "right"]);
+    see(&mut app, "Sel 2-3");
+    app.wait_for("text:Chip held").unwrap();
+    // The next one goes on past it, and back again holds it from there.
+    keys(&mut app, &["right"]);
+    see(&mut app, "Sel 3-3");
+    app.wait_for("text:Chip free").unwrap();
+    keys(&mut app, &["left"]);
+    see(&mut app, "Sel 2-3");
+    keys(&mut app, &["left"]);
+    see(&mut app, "Sel 2-2");
+    // Shift extends over it as over a character.
+    keys(&mut app, &["shift+right"]);
+    see(&mut app, "Sel 2-3");
+    app.wait_for("text:Chip free").unwrap();
+}
+
+#[test]
 fn typing_at_a_gap_cursor_opens_a_paragraph() {
     let mut app = start(two_atoms());
     focus_start(&mut app);

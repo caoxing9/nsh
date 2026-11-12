@@ -921,6 +921,15 @@ impl Rv {
             }
             return;
         }
+        // An arrow stops on an inline node that can be selected (a chip, a
+        // picture), selecting it, as ProseMirror's does; the next one
+        // goes on past it.
+        if !m.extend
+            && m.unit == Unit::Char
+            && let Some(node) = inline_node_beside(&doc, &sel, m.dir)
+        {
+            return self.set_selection(node, true);
+        }
         let head = sel.head();
         let affinity = sel.affinity();
         let target: Option<(usize, Affinity, Option<Selection>)> = match m.unit {
@@ -2446,6 +2455,33 @@ pub(crate) fn drop_transaction(
     tr.set_meta("uiEvent", Value::from("drop"));
     tr.scroll_into_view();
     Some(tr)
+}
+
+/// The selection of the inline node right beside a caret, toward `dir`,
+/// when it is one a node selection may hold (prosemirror-view's
+/// `selectHorizontally`).
+fn inline_node_beside(doc: &Node, sel: &Selection, dir: i32) -> Option<Selection> {
+    if !sel.empty() || sel.as_text().is_none() {
+        return None;
+    }
+    let head = doc.resolve(sel.head()).ok()?;
+    if !head.parent().inline_content() {
+        return None;
+    }
+    let node = if dir > 0 {
+        head.node_after()
+    } else {
+        head.node_before()
+    }?;
+    if node.is_text() || !node.is_atom() || !NodeSelection::is_selectable(&node) {
+        return None;
+    }
+    let pos = if dir > 0 {
+        sel.head()
+    } else {
+        sel.head().checked_sub(node.node_size())?
+    };
+    Some(NodeSelection::create(doc, pos))
 }
 
 /// A textblock's content as text: its texts, and U+FFFC for each inline
