@@ -1058,10 +1058,12 @@ fn leaf(rv: &Rv, node: Node, pos: usize, drawn: Option<String>) -> AnyElement {
         );
         let el = view.create(&cx, &node);
         cleanup(move || view.destroy());
-        return styled(view_box()).child(el).into_element();
+        return styled(inline_box(rv, pos)).child(el).into_element();
     }
     if render_kind(&node) == Some("image") {
-        return styled(view_box()).child(image_of(&node)).into_element();
+        return styled(inline_box(rv, pos))
+            .child(image_of(&node))
+            .into_element();
     }
     if let Some(drawn) = drawn {
         let (class_node, style_node) = (node.clone(), node);
@@ -1095,6 +1097,14 @@ fn leaf(rv: &Rv, node: Node, pos: usize, drawn: Option<String>) -> AnyElement {
 
 fn view_box() -> View {
     view()
+}
+
+/// The box of an inline leaf at `pos`, which tells the geometry its width:
+/// in its line's text the box is one character, whose own width says
+/// nothing of the view's.
+fn inline_box(rv: &Rv, pos: usize) -> View {
+    let rv = rv.clone();
+    view_box().on_layout(move |b: &Bounds<Points>| rv.set_box(pos, b.size.width))
 }
 
 /// A node view's element for a block, made again when the view's
@@ -1434,6 +1444,23 @@ impl Rv {
             return;
         }
         geo.frames.insert(id, (parent, frame));
+        drop(geo);
+        self.layout_rev.update(|r| *r += 1);
+    }
+
+    /// The width of the inline box at `pos`.
+    fn set_box(&self, pos: usize, width: Points) {
+        let mut geo = self.geo.borrow_mut();
+        let Some(id) = geo.text_at(pos) else {
+            return;
+        };
+        let Some(text) = geo.texts.get_mut(&id) else {
+            return;
+        };
+        let at = text.map.to_text(pos - text.start);
+        if text.boxes.insert(at, width) == Some(width) {
+            return;
+        }
         drop(geo);
         self.layout_rev.update(|r| *r += 1);
     }

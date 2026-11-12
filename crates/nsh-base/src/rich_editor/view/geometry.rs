@@ -103,6 +103,11 @@ pub(crate) struct TextGeo {
     /// The box the frame is in (the block's own, else a node view's
     /// content slot).
     pub(crate) owner: Option<u64>,
+    /// The widths of its inline boxes (node views, images), by their
+    /// offset in the rendered text, as their views report them. A box is
+    /// one character of the text but as wide as its view, so a place in
+    /// its line is found around it, never by the character's own width.
+    pub(crate) boxes: HashMap<u32, Points>,
 }
 
 /// Measures a text in a font (the platform's measurer, captured).
@@ -196,7 +201,7 @@ impl Geometry {
         let (x, y, h) = match line_of(&geo.lines, t, affinity) {
             Some(i) => {
                 let line = &geo.lines[i];
-                (line.x + self.x_in_line(line, t), line.y, line.height)
+                (line.x + self.x_in_line(geo, line, t), line.y, line.height)
             }
             None => (px(0.0), px(0.0), geo.frame.size.height.max(px(1.0))),
         };
@@ -254,14 +259,14 @@ impl Geometry {
                     continue;
                 }
                 let x0 = if a > line.start {
-                    self.x_in_line(line, a)
+                    self.x_in_line(geo, line, a)
                 } else {
                     px(0.0)
                 };
                 let through =
                     to > end || b > line.end || (b == line.end && to > start + geo.map.to_doc(b));
                 let x1 = if b < line.end || (b == line.end && !through) {
-                    self.x_in_line(line, b)
+                    self.x_in_line(geo, line, b)
                 } else {
                     line.width + px(4.0)
                 };
@@ -283,34 +288,61 @@ impl Geometry {
         out
     }
 
+    /// Where the first `units` UTF-16 units of a line end (from the line's
+    /// left). The line's inline boxes take the widths their views report
+    /// (`geo.boxes`); its text shares the rest of the line's width in
+    /// proportion to its measured widths.
+    fn x_of_units(&self, geo: &TextGeo, line: &TextLine, units: u32) -> Points {
+        let (mut boxes, mut boxes_before) = (px(0.0), px(0.0));
+        let (mut plain, mut prefix) = (String::new(), 0usize);
+        let mut at = 0u32;
+        for c in line.text.chars() {
+            if at == units {
+                prefix = plain.len();
+            }
+            let known = (c == nsh_core::ATTACHMENT_CHAR)
+                .then(|| geo.boxes.get(&(line.start + at)))
+                .flatten();
+            match known {
+                Some(w) => {
+                    boxes += *w;
+                    if at < units {
+                        boxes_before += *w;
+                    }
+                }
+                None => plain.push(c),
+            }
+            at += c.len_utf16() as u32;
+        }
+        if at <= units {
+            prefix = plain.len();
+        }
+        let full = self.measure_text(&plain);
+        let text = if full <= px(0.0) || prefix == 0 {
+            px(0.0)
+        } else {
+            (line.width - boxes).max(px(0.0)) * (self.measure_text(&plain[..prefix]).0 / full.0)
+        };
+        (boxes_before + text).min(line.width)
+    }
+
     /// Where `x` of a line falls: the nearest boundary between graphemes.
-    fn offset_in_line(&self, line: &TextLine, x: Points) -> u32 {
+    fn offset_in_line(&self, geo: &TextGeo, line: &TextLine, x: Points) -> u32 {
         if x <= px(0.0) || line.text.is_empty() {
             return line.start;
         }
         if x >= line.width {
             return line.end;
         }
-        let full = self.measure_text(&line.text).max(px(1.0));
         let mut best = (line.start, Points(f32::MAX));
         let mut units = 0u32;
-        let mut boundaries = vec![(0u32, 0usize)];
+        let mut boundaries = vec![0u32];
         for g in line.text.graphemes(true) {
             units += g.encode_utf16().count() as u32;
-            boundaries.push((units, 0));
+            boundaries.push(units);
         }
-        let mut byte = 0usize;
-        for (i, g) in line.text.graphemes(true).enumerate() {
-            byte += g.len();
-            boundaries[i + 1].1 = byte;
-        }
-        for (u, b) in boundaries {
-            let w = if b == 0 {
-                px(0.0)
-            } else {
-                line.width * (self.measure_text(&line.text[..b]).0 / full.0)
-            };
-            let d = Points((w - x).0.abs());
+        for u in boundaries {
+            let d = Points((self.x_of_units(geo, line, u) - x).0.abs());
             if d < best.1 {
                 best = (line.start + u, d);
             }
@@ -319,18 +351,14 @@ impl Geometry {
     }
 
     /// The x of text offset `t` in a line (from the line's left).
-    fn x_in_line(&self, line: &TextLine, t: u32) -> Points {
+    fn x_in_line(&self, geo: &TextGeo, line: &TextLine, t: u32) -> Points {
         if t <= line.start || line.text.is_empty() {
             return px(0.0);
         }
         if t >= line.end {
             return line.width;
         }
-        let units: Vec<u16> = line.text.encode_utf16().collect();
-        let k = ((t - line.start) as usize).min(units.len());
-        let prefix = String::from_utf16_lossy(&units[..k]);
-        let full = self.measure_text(&line.text).max(px(1.0));
-        line.width * (self.measure_text(&prefix).0 / full.0)
+        self.x_of_units(geo, line, t - line.start)
     }
 
     /// The place at `p` (content box): an atom it is on, else the nearest
@@ -402,7 +430,7 @@ impl Geometry {
             .position(|l| local.y < l.y + l.height)
             .unwrap_or(geo.lines.len() - 1);
         let line = &geo.lines[index];
-        let t = self.offset_in_line(line, local.x - line.x);
+        let t = self.offset_in_line(geo, line, local.x - line.x);
         // The end of a wrapped line shows on that line.
         let affinity = if t == line.end && index + 1 < geo.lines.len() {
             Affinity::Upstream
@@ -505,6 +533,38 @@ mod tests {
             size: 5,
             len: 6,
         }
+    }
+
+    #[test]
+    fn a_place_after_an_inline_box_is_past_the_boxs_width() {
+        // A box 60 wide, then "abcd" at 10 a letter: the box's character
+        // alone measures 10 as well.
+        let mut text = TextGeo {
+            lines: vec![TextLine {
+                text: "\u{FFFC}abcd".into(),
+                start: 0,
+                end: 5,
+                width: px(100.0),
+                height: px(20.0),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let geo = Geometry {
+            measure: Some(Rc::new(|_, t| px(10.0 * t.chars().count() as f32))),
+            ..Default::default()
+        };
+        let line = text.lines[0].clone();
+        // Without the box's width, by the characters' own.
+        assert_eq!(geo.x_in_line(&text, &line, 1), px(20.0));
+        text.boxes.insert(0, px(60.0));
+        assert_eq!(geo.x_in_line(&text, &line, 1), px(60.0));
+        assert_eq!(geo.x_in_line(&text, &line, 3), px(80.0));
+        assert_eq!(geo.x_in_line(&text, &line, 5), px(100.0));
+        // And back: a point over the box is at the nearer side of it.
+        assert_eq!(geo.offset_in_line(&text, &line, px(20.0)), 0);
+        assert_eq!(geo.offset_in_line(&text, &line, px(50.0)), 1);
+        assert_eq!(geo.offset_in_line(&text, &line, px(72.0)), 2);
     }
 
     #[test]
