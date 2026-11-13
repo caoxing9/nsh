@@ -195,9 +195,16 @@ impl Geometry {
 
     /// The caret's box at `pos`: as high as its line, without width.
     pub(crate) fn caret_rect(&self, pos: usize, affinity: Affinity) -> Option<Bounds<Points>> {
+        self.caret_rect_past(pos, affinity, 0)
+    }
+
+    /// [`Self::caret_rect`] `past` units of rendered text further on: past
+    /// what an input method is composing at `pos`, which the line shows
+    /// but the document does not hold yet.
+    fn caret_rect_past(&self, pos: usize, affinity: Affinity, past: u32) -> Option<Bounds<Points>> {
         let id = self.text_at(pos)?;
         let (origin, geo) = self.text_box(id)?;
-        let t = geo.map.to_text(pos - geo.start);
+        let t = geo.map.to_text(pos - geo.start) + past;
         let (x, y, h) = match line_of(&geo.lines, t, affinity) {
             Some(i) => {
                 let line = &geo.lines[i];
@@ -215,15 +222,18 @@ impl Geometry {
     /// and descender less their own gap, as gpui-kit's input draws 0.85 of
     /// a normal line), centred in the line, rather than the whole line box
     /// [`Self::caret_rect`] gives.
-    pub(crate) fn caret_glyph_rect(
+    /// `past` units of rendered text further on: after a composition
+    /// ([`Self::caret_rect_past`]).
+    pub(crate) fn caret_glyph_rect_past(
         &self,
         pos: usize,
         affinity: Affinity,
+        past: u32,
     ) -> Option<Bounds<Points>> {
-        let b = self.caret_rect(pos, affinity)?;
+        let b = self.caret_rect_past(pos, affinity, past)?;
         let id = self.text_at(pos)?;
         let (_, geo) = self.text_box(id)?;
-        let t = geo.map.to_text(pos - geo.start);
+        let t = geo.map.to_text(pos - geo.start) + past;
         let Some(line) = line_of(&geo.lines, t, affinity).map(|i| &geo.lines[i]) else {
             return Some(b);
         };

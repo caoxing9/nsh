@@ -1319,7 +1319,10 @@ fn caret(rv: Rv) -> impl IntoElement {
         rv.sel_rev.get();
         rv.layout_rev.get();
         rv.doc_rev.get();
-        if rv.composition.get().is_some() || !rv.props.editable.get() {
+        // While an input method composes, at the composition's end (it
+        // used to hide: typing pinyin showed no caret at all).
+        rv.composition.get();
+        if !rv.props.editable.get() {
             return None;
         }
         let empty_text = {

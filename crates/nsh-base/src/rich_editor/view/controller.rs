@@ -2116,9 +2116,15 @@ impl Rv {
     pub(crate) fn caret_glyph_rect(&self) -> Option<Bounds<Points>> {
         let state = self.st.borrow();
         let sel = state.selection();
+        // While an input method composes at the caret, after what it
+        // composes, as a system text field shows it.
+        let past = self
+            .composition
+            .with_untracked(|c| c.as_deref().map(|t| t.encode_utf16().count() as u32))
+            .unwrap_or(0);
         self.geo
             .borrow()
-            .caret_glyph_rect(sel.head(), sel.affinity())
+            .caret_glyph_rect_past(sel.head(), sel.affinity(), past)
     }
 
     /// The box around the selection in the content box: its cells' (a
