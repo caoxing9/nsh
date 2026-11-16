@@ -861,7 +861,14 @@ impl Input {
             TextAlign::Right => NSTextAlignment::Right,
         };
         // UIKit tints the caret and the selection with one color.
-        let tint = config.caret_color.or(config.selection_color).map(ui_color);
+        // An input with no caret drawn is another view's sink: nothing of
+        // UIKit's shows on it either, not the composition's marked range
+        // nor its caret (a blue sliver at the editor's caret while typing
+        // pinyin).
+        let tint = match config.caret_hidden {
+            true => Some(UIColor::clearColor()),
+            false => config.caret_color.or(config.selection_color).map(ui_color),
+        };
         match &self.editor {
             Editor::Line(field) => {
                 field.setFont(Some(&font));
