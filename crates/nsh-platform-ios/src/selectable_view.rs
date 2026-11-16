@@ -557,6 +557,24 @@ define_class!(
 );
 
 impl AreaResponder {
+    /// Selects everything in the area as a touch selection would: handles
+    /// on its ends and the edit menu over it (an app's "Select text",
+    /// `ElementRef::command("selectAll")` on the area).
+    pub(crate) fn select_all_by_touch(&self) {
+        self.hide_menu();
+        self.refresh_texts();
+        self.ivars().touch.set(true);
+        let changed = {
+            let texts = self.ivars().texts.borrow();
+            self.ivars().model.borrow_mut().select_all(&*texts)
+        };
+        self.becomeFirstResponder();
+        if changed {
+            self.redraw();
+        }
+        self.show_menu();
+    }
+
     /// Makes `area` a selectable view.
     pub(crate) fn attach(
         area: &UIView,

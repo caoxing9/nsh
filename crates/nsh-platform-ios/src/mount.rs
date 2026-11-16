@@ -1626,6 +1626,14 @@ impl Mounter {
     }
 
     fn command(&mut self, id: NodeId, command: Command) {
+        // A selectable view's own: everything in it selected, by touch.
+        if let Command::Native { name, .. } = &command
+            && &**name == "selectAll"
+            && let Some((_, area)) = self.areas.iter().find(|(a, _)| *a == id)
+        {
+            area.select_all_by_touch();
+            return;
+        }
         if let Command::Native { name, args } = &command {
             if let Some(Slot {
                 native: Native::Component(host),
