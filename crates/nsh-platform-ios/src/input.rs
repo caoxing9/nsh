@@ -149,6 +149,20 @@ define_class!(
             }
         }
 
+        /// An input with no caret drawn is another view's sink (a rich or
+        /// code editor's, which holds the text itself): it says it has
+        /// text, so the keyboard repeats Delete while it is held (and
+        /// speeds up) instead of deleting once: UIKit repeats only while
+        /// the input has text, and the sink is often empty.
+        #[unsafe(method(hasText))]
+        fn has_text(&self) -> Bool {
+            if self.ivars().caret_hidden.get() {
+                return Bool::YES;
+            }
+            // SAFETY: calling the superclass implementation.
+            unsafe { msg_send![super(self), hasText] }
+        }
+
         /// A hardware keyboard's keys go to the app's shortcuts first
         /// (`nsh/keymap`): a key a binding takes never reaches the input.
         #[unsafe(method(pressesBegan:withEvent:))]
@@ -313,6 +327,20 @@ define_class!(
             if empty {
                 backspace_on_empty(self.as_ref());
             }
+        }
+
+        /// An input with no caret drawn is another view's sink (a rich or
+        /// code editor's, which holds the text itself): it says it has
+        /// text, so the keyboard repeats Delete while it is held (and
+        /// speeds up) instead of deleting once: UIKit repeats only while
+        /// the input has text, and the sink is often empty.
+        #[unsafe(method(hasText))]
+        fn has_text(&self) -> Bool {
+            if self.ivars().caret_hidden.get() {
+                return Bool::YES;
+            }
+            // SAFETY: calling the superclass implementation.
+            unsafe { msg_send![super(self), hasText] }
         }
 
         /// Shift+Return and Option+Return on a hardware keyboard insert a
