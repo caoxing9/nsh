@@ -48,6 +48,15 @@ use crate::{
 /// is in progress).
 const SINK_LIMIT: usize = 256;
 
+/// How much of the caret's textblock before it the sink holds, at most
+/// (bytes), where it holds it ([`SINK_CONTEXT`]).
+const SINK_CONTEXT_LIMIT: usize = 128;
+
+/// Whether the sink holds the text before the caret rather than nothing:
+/// iOS's keyboard repeats a held Delete (and speeds up to words) only in
+/// text it sees before the caret; in an empty input it deletes once.
+const SINK_CONTEXT: bool = cfg!(target_os = "ios");
+
 /// How much nearer a drop place that takes a block as it is counts than
 /// one that takes it wrapped, between blocks.
 const DIRECT_SLACK: f32 = 6.0;
@@ -137,6 +146,9 @@ struct Sink {
     /// The sink's text last reported while composing, taken when the
     /// composition ends.
     held: Option<String>,
+    /// The sink's edit is being applied: the keys it makes leave the sink
+    /// as the platform holds it.
+    editing: bool,
 }
 
 /// The view's controller. Cloned into the closures that need it.
@@ -599,7 +611,14 @@ impl Rv {
     fn sink_edited(&self, text: &str) {
         let (deleted, inserted, composed) = {
             let mut sink = self.sink.borrow_mut();
+            let set = std::mem::take(&mut sink.text);
             let base = match sink.emptied.take() {
+                // The text set for the caret: the platform's text extends it,
+                // else extends what it held before (the value set was
+                // dropped: the user typed first), else it is to it.
+                Some(_) if !set.is_empty() && text.starts_with(set.as_str()) => set,
+                Some(old) if !set.is_empty() && text != old && text.starts_with(old.as_str()) => old,
+                Some(_) if !set.is_empty() => set,
                 // The platform dropped the empty value: the text still extends
                 // what it held. A text equal to what it held was typed again
                 // into the emptied sink: platforms report each edit, so an
@@ -609,7 +628,7 @@ impl Rv {
                 // the same, and is inserted a second time.
                 Some(old) if text != old && text.starts_with(old.as_str()) => old,
                 Some(_) => String::new(),
-                None => std::mem::take(&mut sink.text),
+                None => set,
             };
             let prefix = common_prefix(&base, text);
             let deleted = base[prefix..].chars().count();
@@ -618,6 +637,7 @@ impl Rv {
             (deleted, inserted, sink.composition.is_some())
         };
         self.sink_value.set(text.to_owned());
+        self.sink.borrow_mut().editing = true;
         for _ in 0..deleted {
             self.key(&KeyEvent::new("Backspace"));
         }
@@ -630,26 +650,68 @@ impl Rv {
                 self.key(&KeyEvent::new("Enter"));
             }
         }
-        {
+        let refill = {
             let mut sink = self.sink.borrow_mut();
+            sink.editing = false;
             if !sink.composing {
                 sink.composition = None;
             }
-        }
-        if self.sink.borrow().text.len() > SINK_LIMIT {
+            if SINK_CONTEXT {
+                // The platform's text still ends with the caret's: it stays
+                // (setting it again would stop a held Delete), unless it grew
+                // too long or the edit went elsewhere (an input rule, a new
+                // block).
+                let context = self.sink_context();
+                sink.text.len() > SINK_LIMIT
+                    || !sink.text.ends_with(context.as_str())
+                    || context.is_empty() && !sink.text.is_empty()
+            } else {
+                sink.text.len() > SINK_LIMIT
+            }
+        };
+        if refill {
             self.empty_sink();
         }
     }
 
-    /// Empties the sink, unless an input method is composing there.
+    /// The text the sink holds for the caret ([`SINK_CONTEXT`]): its
+    /// textblock's before it, the last [`SINK_CONTEXT_LIMIT`] bytes; empty
+    /// for a range, a node or a gap, and on other platforms.
+    fn sink_context(&self) -> String {
+        if !SINK_CONTEXT {
+            return String::new();
+        }
+        let state = self.session.state();
+        let selection = state.selection();
+        if !selection.empty() || selection.as_text().is_none() {
+            return String::new();
+        }
+        let head = selection.resolved_head();
+        if !head.parent().is_textblock() {
+            return String::new();
+        }
+        let text = head
+            .doc()
+            .text_between(head.start(head.depth), head.pos, None, Some("\u{fffc}"));
+        let mut cut = text.len().saturating_sub(SINK_CONTEXT_LIMIT);
+        while !text.is_char_boundary(cut) {
+            cut += 1;
+        }
+        text[cut..].to_owned()
+    }
+
+    /// Sets the sink to the caret's text ([`Self::sink_context`]), unless an
+    /// input method is composing there or an edit of it is being applied.
     fn empty_sink(&self) {
+        let context = self.sink_context();
         let mut sink = self.sink.borrow_mut();
-        if sink.composing || sink.text.is_empty() {
+        if sink.composing || sink.editing || sink.text == context {
             return;
         }
-        sink.emptied = Some(std::mem::take(&mut sink.text));
+        let old = std::mem::replace(&mut sink.text, context.clone());
+        sink.emptied = Some(old);
         drop(sink);
-        self.sink_value.set(String::new());
+        self.sink_value.set(context);
     }
 
     /// An input method's composition started, changed or ended: its text
