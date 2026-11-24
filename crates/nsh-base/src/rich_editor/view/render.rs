@@ -1367,12 +1367,22 @@ fn caret(rv: Rv) -> impl IntoElement {
 /// over the scroll view, not in it: the platforms scroll a focused field
 /// into view, which the editor does itself for its caret.
 fn sink(rv: Rv) -> impl IntoElement {
+    // Where the caret last was: before its geometry is known (a remount)
+    // the sink stays there, not at the editor's corner, where an input
+    // method would open its candidates.
+    let last = Rc::new(Cell::new(None::<Bounds<Points>>));
     let at = {
         let rv = rv.clone();
         computed(move || {
             rv.sel_rev.get();
             rv.layout_rev.get();
-            let caret = rv.caret_rect().unwrap_or_default();
+            let caret = match rv.caret_rect() {
+                Some(caret) => {
+                    last.set(Some(caret));
+                    caret
+                }
+                None => last.get().unwrap_or_default(),
+            };
             let size = rv.viewport.get();
             // At the bottom of the caret's line: input methods open their
             // candidates under the field's line, which would cover the
@@ -1381,6 +1391,9 @@ fn sink(rv: Rv) -> impl IntoElement {
             // Cell, where the terminal draws its cursor.
             let bottom = match crate::terminal::is_terminal() {
                 true => px(0.0),
+                // In its 1 pt type (macOS) the sink's line is the caret's
+                // last points.
+                false if cfg!(target_os = "macos") => (caret.size.height - px(2.0)).max(px(0.0)),
                 false => (caret.size.height - px(SINK_HEIGHT)).max(px(0.0)),
             };
             let y = caret.origin.y + bottom - rv.scroll_y.get();
@@ -1400,13 +1413,23 @@ fn sink(rv: Rv) -> impl IntoElement {
         rv.clone(),
     );
     let value = rv.sink_value;
+    let viewport = rv.viewport;
+    // On macOS the sink holds the character or two before the caret
+    // (`SINK_CONTEXT`), and input methods open their candidates where its
+    // text ends: in a 1 pt type that is the caret's place, and as wide as
+    // the line's rest, the text keeps to one line.
+    let mac = cfg!(target_os = "macos");
     input()
         .element_ref(&rv.input)
         .absolute()
         .left(move || Length::from(at.get().x))
         .top(move || Length::from(at.get().y))
-        .w(px(1.0))
+        .w(move || {
+            let width = if mac { viewport.get().width - at.get().x } else { px(1.0) };
+            Length::from(width.max(px(1.0)))
+        })
         .h(px(SINK_HEIGHT))
+        .when(mac, |s| s.text_size(px(1.0)))
         .pointer_events(PointerEvents::None)
         .p_0()
         .border(px(0.0))

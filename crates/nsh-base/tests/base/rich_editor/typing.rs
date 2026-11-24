@@ -440,11 +440,14 @@ fn a_cancelled_composition_in_the_sink_leaves_the_document() {
     let mut app = start(paragraphs(&["ab"]));
     focus(&mut app);
     keys(&mut app, &["end"]);
+    // Where the sink holds the text before the caret (iOS, macOS), the
+    // platform's text is that and the composition after it.
+    let held = if cfg!(any(target_os = "ios", target_os = "macos")) { "ab" } else { "" };
     compose(&mut app, true, "n");
-    sink_text(&mut app, "n");
+    sink_text(&mut app, &format!("{held}n"));
     compose(&mut app, true, "ni");
-    sink_text(&mut app, "ni");
-    sink_text(&mut app, "");
+    sink_text(&mut app, &format!("{held}ni"));
+    sink_text(&mut app, held);
     compose(&mut app, false, "");
     see(&mut app, &tree(r#"doc(paragraph("ab"))"#));
     see(&mut app, "Sel 3-3");

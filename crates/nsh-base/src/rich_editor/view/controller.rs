@@ -49,13 +49,17 @@ use crate::{
 const SINK_LIMIT: usize = 256;
 
 /// How much of the caret's textblock before it the sink holds, at most
-/// (bytes), where it holds it ([`SINK_CONTEXT`]).
-const SINK_CONTEXT_LIMIT: usize = 128;
+/// (bytes), where it holds it ([`SINK_CONTEXT`]). On macOS a character or
+/// two: what an input method reads to space Chinese from Latin, and no
+/// more, as the candidates open where the sink's text ends.
+const SINK_CONTEXT_LIMIT: usize = if cfg!(target_os = "macos") { 8 } else { 128 };
 
 /// Whether the sink holds the text before the caret rather than nothing:
 /// iOS's keyboard repeats a held Delete (and speeds up to words) only in
-/// text it sees before the caret; in an empty input it deletes once.
-const SINK_CONTEXT: bool = cfg!(target_os = "ios");
+/// text it sees before the caret; in an empty input it deletes once. On
+/// macOS, input methods that put a space between Chinese and Latin text
+/// ("中英文间自动加空格") read the character before the caret from it.
+const SINK_CONTEXT: bool = cfg!(any(target_os = "ios", target_os = "macos"));
 
 /// How much nearer a drop place that takes a block as it is counts than
 /// one that takes it wrapped, between blocks.
