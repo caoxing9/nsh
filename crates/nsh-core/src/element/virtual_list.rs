@@ -183,6 +183,8 @@ pub(crate) struct VirtualListEl {
     pub(crate) separator: Option<SeparatorFn>,
     /// The row scrolled to before the first frame.
     pub(crate) initial_index: Option<u32>,
+    /// The list opens at its end instead ([`VirtualList::initial_scroll_to_end`]).
+    pub(crate) initial_end: bool,
     /// How long rows stay viewable before they are reported.
     pub(crate) min_view_time: Option<Duration>,
     /// The owner of the run that made the list (a component's view, a
@@ -219,6 +221,7 @@ pub fn virtual_list<R: IntoElement>(
         keys: None,
         separator: None,
         initial_index: None,
+        initial_end: false,
         min_view_time: None,
         scope: Some(super::Owner::current_or_detached()).filter(|o| *o != super::Owner::detached()),
     }));
@@ -346,6 +349,17 @@ impl VirtualList {
     /// `initialScrollIndex`).
     pub fn initial_scroll_index(mut self, index: usize) -> Self {
         self.list().initial_index = Some(index as u32);
+        self
+    }
+
+    /// Opens the list at its end before the first frame: the last row at
+    /// the viewport's bottom, and kept there while the rows near it are
+    /// measured (their estimated sizes becoming real ones), as a chat
+    /// opens on its latest message. A scroll of the user's ends it.
+    /// [`Self::initial_scroll_index`] with the last row aligns that row to
+    /// the top instead.
+    pub fn initial_scroll_to_end(mut self) -> Self {
+        self.list().initial_end = true;
         self
     }
 

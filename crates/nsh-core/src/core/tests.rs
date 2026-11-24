@@ -11032,6 +11032,38 @@ mod components {
         assert!(shown.iter().all(|t| !t.starts_with("failed")), "{shown:?}");
     }
 
+    /// A chat's list: 300 rows of 40 pt, opened at its end.
+    #[component]
+    fn OpensAtTheEnd() -> impl IntoElement {
+        view().h(px(400.0)).child(
+            virtual_list(300, move |at| view().h(px(40.0)).child(text(move || format!("row {}", at.index()))))
+                .estimated_item_size(px(40.0))
+                .initial_scroll_to_end()
+                .flex_1(),
+        )
+    }
+
+    /// `initial_scroll_to_end` opens a list with its last row at the
+    /// viewport's bottom, not its top (as `initial_scroll_index` of the
+    /// last row put it): the first frame shows the last rows.
+    #[test]
+    fn a_list_can_open_at_its_end() {
+        let mut c = core();
+        c.mount_root(&crate::element::Root::new::<OpensAtTheEnd>(|| ()));
+        let batch = c.commit().unwrap();
+        let scrolled_to = batch.items.iter().find_map(|i| match i {
+            MountItem::Command {
+                command: Command::ScrollTo { y, .. },
+                ..
+            } => Some(y.0),
+            _ => None,
+        });
+        // 300 rows of 40 pt in a 400 pt viewport: its end is at 11 600.
+        assert_eq!(scrolled_to, Some(300.0 * 40.0 - 400.0), "{:?}", batch.items);
+        let shown = texts(&batch);
+        assert!(shown.contains(&"row 299".to_owned()), "{shown:?}");
+    }
+
     /// A long list of its own rows: row 1 holds a field, row 2 a menu (an
     /// overlay) while it is open; a press closes the menu.
     #[component]

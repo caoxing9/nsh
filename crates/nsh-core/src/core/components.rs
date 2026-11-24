@@ -4226,7 +4226,13 @@ impl<M: TextEngine> Core<M> {
             (count, keys)
         };
         self.send_list_rows(id, before.as_ref(), count, keys.as_ref());
-        if before.is_none()
+        if before.is_none() && list.initial_end && count > 0 {
+            // Pinned to the end: followed as the rows are measured.
+            let _ = self.apply_op(Op::Command {
+                id,
+                command: Command::ScrollToEnd { animated: false },
+            });
+        } else if before.is_none()
             && let Some(index) = list.initial_index
         {
             let _ = self.apply_op(Op::Command {
