@@ -1391,9 +1391,6 @@ fn sink(rv: Rv) -> impl IntoElement {
             // Cell, where the terminal draws its cursor.
             let bottom = match crate::terminal::is_terminal() {
                 true => px(0.0),
-                // In its 1 pt type (macOS) the sink's line is the caret's
-                // last points.
-                false if cfg!(target_os = "macos") => (caret.size.height - px(2.0)).max(px(0.0)),
                 false => (caret.size.height - px(SINK_HEIGHT)).max(px(0.0)),
             };
             let y = caret.origin.y + bottom - rv.scroll_y.get();
@@ -1413,23 +1410,17 @@ fn sink(rv: Rv) -> impl IntoElement {
         rv.clone(),
     );
     let value = rv.sink_value;
-    let viewport = rv.viewport;
-    // On macOS the sink holds the character or two before the caret
-    // (`SINK_CONTEXT`), and input methods open their candidates where its
-    // text ends: in a 1 pt type that is the caret's place, and as wide as
-    // the line's rest, the text keeps to one line.
-    let mac = cfg!(target_os = "macos");
+    // A point wide, in the input's own size: input methods get a caret as
+    // tall as a field's at the caret. What it holds (`SINK_CONTEXT`) wraps
+    // a line per character; where AppKit has no rect for it, the macOS
+    // input answers its visible part, the caret's place.
     input()
         .element_ref(&rv.input)
         .absolute()
         .left(move || Length::from(at.get().x))
         .top(move || Length::from(at.get().y))
-        .w(move || {
-            let width = if mac { viewport.get().width - at.get().x } else { px(1.0) };
-            Length::from(width.max(px(1.0)))
-        })
+        .w(px(1.0))
         .h(px(SINK_HEIGHT))
-        .when(mac, |s| s.text_size(px(1.0)))
         .pointer_events(PointerEvents::None)
         .p_0()
         .border(px(0.0))
