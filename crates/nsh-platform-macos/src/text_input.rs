@@ -989,13 +989,15 @@ define_class!(
             ok
         }
 
-        /// Where a range is on screen (input methods open their candidates
-        /// at what they mark, or at the caret). AppKit answers the zero
-        /// rect, the screen's corner, for the caret at the end of a
-        /// right-aligned line, and for the first character an input method
-        /// marks in an emptied view; the layout manager knows both: the
-        /// edge after the character before (or the empty line's), and
-        /// where the range's glyphs are.
+        /// Where a range is on screen: input methods open their candidates
+        /// at what they mark, or at the caret. AppKit answers only for what
+        /// lies in the view's visible rect, and the zero rect (the screen's
+        /// corner) for the rest; an input kept out of sight on purpose (the
+        /// rich editor's sink, transparent, reaching past its editor's left
+        /// edge so its text ends at the caret) is answered from the layout
+        /// manager instead: the edge after the character before (or the
+        /// empty line's) for a caret, where the glyphs are for a range. A
+        /// caret on the right edge of a right-aligned line is outside too.
         #[unsafe(method(firstRectForCharacterRange:actualRange:))]
         fn first_rect(&self, range: NSRange, actual: *mut NSRange) -> NSRect {
             // SAFETY: NSTextView's own method (NSTextInputClient).

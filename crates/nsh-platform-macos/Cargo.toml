@@ -81,3 +81,7 @@ harness = false
 [[test]]
 name = "draw_on_show"
 harness = false
+
+[[test]]
+name = "ime_rects"
+harness = false
