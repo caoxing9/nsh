@@ -40,6 +40,9 @@ use crate::{
 const CARET_WIDTH: f32 = 1.5;
 /// The height of the sink, the native input that takes typed text.
 const SINK_HEIGHT: f32 = 16.0;
+/// The macOS sink's width, ending at the caret: room for the characters
+/// before the caret it holds (`SINK_CONTEXT`) on one line.
+const SINK_MAC_WIDTH: f32 = 600.0;
 
 /// The gap cursor's width (prosemirror-gapcursor's).
 const GAP_WIDTH: f32 = 20.0;
@@ -1391,9 +1394,6 @@ fn sink(rv: Rv) -> impl IntoElement {
             // Cell, where the terminal draws its cursor.
             let bottom = match crate::terminal::is_terminal() {
                 true => px(0.0),
-                // In its 1 pt type (macOS) the sink's line is the caret's
-                // last points.
-                false if cfg!(target_os = "macos") => (caret.size.height - px(2.0)).max(px(0.0)),
                 false => (caret.size.height - px(SINK_HEIGHT)).max(px(0.0)),
             };
             let y = caret.origin.y + bottom - rv.scroll_y.get();
@@ -1413,23 +1413,30 @@ fn sink(rv: Rv) -> impl IntoElement {
         rv.clone(),
     );
     let value = rv.sink_value;
-    let viewport = rv.viewport;
     // On macOS the sink holds the character or two before the caret
     // (`SINK_CONTEXT`), and input methods open their candidates where its
-    // text ends: in a 1 pt type that is the caret's place, and as wide as
-    // the line's rest, the text keeps to one line.
+    // text ends. In the input's own type, as a field's, aligned right in a
+    // box that ends at the caret, the text ends at the caret's place and
+    // keeps to one line; input methods get a caret as tall as a field's
+    // (a 1 pt type gave them a 1 pt caret, and some, WeType among them,
+    // then opened their candidates over the line or at the screen's edge).
+    // Fully transparent: an input method's own marks on its marked text
+    // (WeType's underline) would show.
     let mac = cfg!(target_os = "macos");
     input()
         .element_ref(&rv.input)
         .absolute()
-        .left(move || Length::from(at.get().x))
-        .top(move || Length::from(at.get().y))
-        .w(move || {
-            let width = if mac { viewport.get().width - at.get().x } else { px(1.0) };
-            Length::from(width.max(px(1.0)))
+        .left(move || {
+            Length::from(if mac {
+                at.get().x - px(SINK_MAC_WIDTH)
+            } else {
+                at.get().x
+            })
         })
+        .top(move || Length::from(at.get().y))
+        .w(px(if mac { SINK_MAC_WIDTH } else { 1.0 }))
         .h(px(SINK_HEIGHT))
-        .when(mac, |s| s.text_size(px(1.0)))
+        .when(mac, |s| s.text_right().opacity(0.0))
         .pointer_events(PointerEvents::None)
         .p_0()
         .border(px(0.0))

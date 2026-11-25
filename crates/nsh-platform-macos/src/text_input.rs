@@ -74,7 +74,7 @@ use objc2_app_kit::{
 use objc2_core_foundation::{CGFloat, CGSize};
 use objc2_foundation::{
     NSAttributedString, NSDictionary, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRange,
-    NSString,
+    NSRect, NSString,
 };
 
 use crate::{
@@ -220,7 +220,10 @@ impl Editor {
                 }
                 None => field.setStringValue(&text),
             },
-            Editor::Area { view, .. } => view.setString(&text),
+            Editor::Area { view, .. } => {
+                view.setString(&text);
+                keep_typing_attributes(view);
+            }
         }
     }
 
@@ -986,6 +989,28 @@ define_class!(
             ok
         }
 
+        /// Where a range is on screen (input methods open their candidates
+        /// at what they mark, or at the caret). AppKit answers the zero
+        /// rect, the screen's corner, for the caret at the end of a
+        /// right-aligned line, and for the first character an input method
+        /// marks in an emptied view; the layout manager knows both: the
+        /// edge after the character before (or the empty line's), and
+        /// where the range's glyphs are.
+        #[unsafe(method(firstRectForCharacterRange:actualRange:))]
+        fn first_rect(&self, range: NSRange, actual: *mut NSRange) -> NSRect {
+            // SAFETY: NSTextView's own method (NSTextInputClient).
+            let rect: NSRect =
+                unsafe { msg_send![super(self), firstRectForCharacterRange: range, actualRange: actual] };
+            if rect != NSRect::ZERO {
+                return rect;
+            }
+            match range.length {
+                0 => caret_rect(self, range.location),
+                _ => glyphs_rect(self, range),
+            }
+            .unwrap_or(rect)
+        }
+
         /// An input method that accepts its marked text as it is changes
         /// neither the text nor always the selection.
         #[unsafe(method(unmarkText))]
@@ -1714,6 +1739,7 @@ pub(crate) fn config(surface: &Rc<Surface>, view: &NshView, config: &InputConfig
             text.setAutomaticSpellingCorrectionEnabled(config.auto_correct);
             let line = LineBox::new(config.style.line_height.0 as CGFloat, natural_height(&font));
             text.setDefaultParagraphStyle(Some(&paragraph(line, align)));
+            keep_typing_attributes(&text);
             // The space above the first line and below the last.
             text.setTextContainerInset(CGSize::new(0.0, line.inset));
             let label = &input.placeholder;
@@ -1864,6 +1890,87 @@ impl LineBox {
             inset: spacing / 2.0,
         }
     }
+}
+
+/// The caret at `at` (UTF-16) on screen, a line tall: the edge after the
+/// character before, or in an empty view the empty line's used edge.
+fn caret_rect(view: &NSTextView, at: usize) -> Option<NSRect> {
+    if at > 0 {
+        let before = NSRange::new(at - 1, 1);
+        // SAFETY: no actual range is asked for (null).
+        let r =
+            unsafe { view.firstRectForCharacterRange_actualRange(before, std::ptr::null_mut()) };
+        if r == NSRect::ZERO {
+            return None;
+        }
+        return Some(NSRect::new(
+            NSPoint::new(r.origin.x + r.size.width, r.origin.y),
+            CGSize::new(0.0, r.size.height),
+        ));
+    }
+    let window = view.window()?;
+    // SAFETY: the view's own layout manager.
+    let used = unsafe { view.layoutManager()?.extraLineFragmentUsedRect() };
+    let origin = view.textContainerOrigin();
+    let local = NSRect::new(
+        NSPoint::new(
+            used.origin.x + used.size.width + origin.x,
+            used.origin.y + origin.y,
+        ),
+        CGSize::new(0.0, used.size.height),
+    );
+    let screen = window.convertRectToScreen(view.convertRect_toView(local, None));
+    Some(screen)
+}
+
+/// Where `range`'s glyphs are laid out, on screen: what AppKit's own answer
+/// is made of, asked of the layout manager.
+fn glyphs_rect(view: &NSTextView, range: NSRange) -> Option<NSRect> {
+    let window = view.window()?;
+    // SAFETY: the view's own layout manager and text container.
+    let (layout, container) = unsafe { (view.layoutManager()?, view.textContainer()?) };
+    let glyphs = unsafe {
+        layout.glyphRangeForCharacterRange_actualCharacterRange(range, std::ptr::null_mut())
+    };
+    if glyphs.length == 0 {
+        return None;
+    }
+    let mut rect = layout.boundingRectForGlyphRange_inTextContainer(glyphs, &container);
+    let origin = view.textContainerOrigin();
+    rect.origin.x += origin.x;
+    rect.origin.y += origin.y;
+    Some(window.convertRectToScreen(view.convertRect_toView(rect, None)))
+}
+
+/// What a text view types with: its font, color and paragraph style.
+/// AppKit takes the typing attributes from the text, so an emptied view
+/// (`setString`) types, and marks an input method's text, in the plain
+/// style: left aligned, a right-aligned input's caret and marked text at
+/// its left edge, where input methods then open their candidates.
+fn keep_typing_attributes(view: &NSTextView) {
+    let Some(paragraph) = view.defaultParagraphStyle() else {
+        return;
+    };
+    let mut keys = Vec::new();
+    let mut values: Vec<Retained<AnyObject>> = Vec::new();
+    // SAFETY: immutable AppKit attribute keys with values of their
+    // documented types (NSFont, NSColor, NSParagraphStyle).
+    unsafe {
+        if let Some(font) = view.font() {
+            keys.push(NSFontAttributeName);
+            values.push(font.into());
+        }
+        if let Some(color) = view.textColor() {
+            keys.push(NSForegroundColorAttributeName);
+            values.push(color.into());
+        }
+        keys.push(NSParagraphStyleAttributeName);
+        values.push(paragraph.into());
+    }
+    let values: Vec<&AnyObject> = values.iter().map(|v| &**v).collect();
+    let attributes = NSDictionary::from_slices(&keys, &values);
+    // SAFETY: valid text attributes.
+    unsafe { view.setTypingAttributes(&attributes) };
 }
 
 /// A text view's paragraph style: alignment and lines.
