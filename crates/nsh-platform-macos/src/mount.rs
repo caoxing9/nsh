@@ -346,6 +346,9 @@ impl Mounter {
             MountItem::ViewStyle { id, style } => {
                 let Some(view) = self.get(*id) else { return };
                 let old = std::mem::replace(&mut view.state_mut().style, style.clone());
+                if old.hidden != style.hidden {
+                    crate::view::set_invisible(view, style.hidden);
+                }
                 crate::input::style_changed(view);
                 crate::transition::style_changed(surface, view, &old);
                 view.moved();

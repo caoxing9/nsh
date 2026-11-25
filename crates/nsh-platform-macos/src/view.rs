@@ -1173,6 +1173,26 @@ impl std::ops::Deref for NshView {
     }
 }
 
+/// `visibility: hidden` (`invisible()`): the `NSView` itself hidden, as
+/// UIKit's backend hides its `UIView`, not only its layer. The view keeps
+/// its frame (and a scroll view its offset), while AppKit skips the
+/// subtree when it lays out, builds the layer tree and updates tracking
+/// areas, and [`crate::sight`] counts nothing in it as seen, so nothing in
+/// it is drawn until it shows. Views navigation hides (a screen under the
+/// top one) are navigation's.
+pub(crate) fn set_invisible(view: &NshView, hidden: bool) {
+    if matches!(
+        view.kind(),
+        ViewKind::Stack | ViewKind::Screen | ViewKind::Modal
+    ) {
+        return;
+    }
+    if view.ns().isHidden() != hidden {
+        view.ns().setHidden(hidden);
+        crate::sight::moved();
+    }
+}
+
 impl NshView {
     /// A new, detached view of node `id`.
     pub(crate) fn new(mtm: MainThreadMarker, id: NodeId, kind: ViewKind) -> Self {
