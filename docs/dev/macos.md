@@ -54,7 +54,10 @@ belong to the app, which owns retention and its storage budget.
 
 - **One view per node.** Each node is an `NshView` (`view.rs`, a flipped, layer-backed `NSView` subclass holding the
   node's `ViewState`). The core lays everything out: a view sits at its frame (`place()`: the origin, a sticky shift,
-  mirrored lists), and its transform, opacity and visibility are its layer's. AppKit resets a layer-backed view's
+  mirrored lists), and its transform and opacity are its layer's. `visibility: hidden` hides the `NSView` itself
+  (`view::set_invisible`), as the iOS backend hides its `UIView`: the subtree keeps its frames (a scroll view its
+  offset), AppKit skips it when it lays out, builds the layer tree and updates tracking areas, and nothing in it
+  counts as seen (`sight.rs`) or draws until it shows; a screen under the top one is navigation's to hide. AppKit resets a layer-backed view's
   anchor, position and transform when it moves the view, so `place()` sets them again every time, with the anchor at
   the top left (transforms are conjugated around the transform origin).
 - **Children live in a container** when the view needs one: scroll views always (a moving offset is the
