@@ -5,7 +5,10 @@
 //! (`NSFilePromiseReceiver`: an image dragged out of a page in Safari or
 //! Chrome, Mail's attachments), which are written to a folder of their
 //! own once dropped and handed over as their contents (`files`), as on the
-//! Web.
+//! Web. A chat app (WeChat, WeCom, Feishu) may offer a picture as its data
+//! alone, or beside the URL of a file in its own container that other apps
+//! may not read: the picture drops as its contents then. Such apps often
+//! offer only the generic operation, not a copy: either is taken.
 use std::{
     cell::RefCell,
     path::PathBuf,
@@ -116,6 +119,11 @@ pub(crate) fn accepting(surface: &Surface) -> bool {
 pub(crate) fn register(view: &NSView) {
     let kind = NSString::from_str("public.file-url");
     let mut kinds = vec![kind];
+    kinds.extend(
+        IMAGE_DATA
+            .iter()
+            .map(|(kind, _, _)| NSString::from_str(kind)),
+    );
     kinds.extend(NSFilePromiseReceiver::readableDraggedTypes().to_vec());
     let kinds = kinds.iter().map(|k| &**k).collect::<Vec<_>>();
     view.registerForDraggedTypes(&NSArray::from_slice(&kinds));
@@ -139,11 +147,22 @@ fn entered_payload(surface: &Surface) -> EventPayload {
     }
 }
 
+/// The operation a drop of files makes for `sender`'s drag: a copy, or the
+/// generic operation of a source that offers no copy (a chat app's
+/// picture); never a move or a link.
+fn operation(sender: &ProtocolObject<dyn NSDraggingInfo>) -> NSDragOperation {
+    let mask = sender.draggingSourceOperationMask();
+    if mask.contains(NSDragOperation::Copy) {
+        NSDragOperation::Copy
+    } else if mask.contains(NSDragOperation::Generic) {
+        NSDragOperation::Generic
+    } else {
+        NSDragOperation::None
+    }
+}
+
 fn target(surface: &Surface, sender: &ProtocolObject<dyn NSDraggingInfo>) -> Option<NshView> {
-    if !sender
-        .draggingSourceOperationMask()
-        .contains(NSDragOperation::Copy)
-    {
+    if operation(sender).is_empty() {
         return None;
     }
     let point = input::event_root(surface)
@@ -196,12 +215,17 @@ pub(crate) fn begin(
     surface: &Surface,
     sender: &ProtocolObject<dyn NSDraggingInfo>,
 ) -> NSDragOperation {
-    let uris = read_uris(sender);
+    let offers = offers(sender);
     // Local files win: a screenshot's thumbnail offers both.
-    let promised = if uris.is_empty() {
-        promised_types(&promises(sender))
-    } else {
-        Vec::new()
+    let (uris, promised) = match uris_of(&offers) {
+        Some(uris) => (uris, Vec::new()),
+        None if offers
+            .iter()
+            .any(|offer| matches!(offer, Offer::Data { .. })) =>
+        {
+            (Vec::new(), offers.iter().map(Offer::mime).collect())
+        }
+        None => (Vec::new(), promised_types(&promises(sender))),
     };
     *surface.file_drop.uris.borrow_mut() = uris;
     *surface.file_drop.promised.borrow_mut() = promised;
@@ -218,7 +242,7 @@ pub(crate) fn update(
         None
     };
     let operation = if next.is_some() {
-        NSDragOperation::Copy
+        operation(sender)
     } else {
         NSDragOperation::None
     };
@@ -227,10 +251,7 @@ pub(crate) fn update(
 }
 
 pub(crate) fn perform(surface: &Surface, sender: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
-    if !sender
-        .draggingSourceOperationMask()
-        .contains(NSDragOperation::Copy)
-    {
+    if operation(sender).is_empty() {
         clear(surface);
         return false;
     }
@@ -238,11 +259,196 @@ pub(crate) fn perform(surface: &Surface, sender: &ProtocolObject<dyn NSDraggingI
         .ns()
         .convertPoint_fromView(sender.draggingLocation(), None);
     let (x, y) = (point.x as f32, point.y as f32);
-    let uris = read_uris(sender);
-    if uris.is_empty() {
-        return drop_promises(surface, x, y, promises(sender));
+    let offers = offers(sender);
+    if let Some(uris) = uris_of(&offers) {
+        return drop_uris(surface, x, y, uris);
     }
-    drop_uris(surface, x, y, uris)
+    if offers
+        .iter()
+        .any(|offer| matches!(offer, Offer::Data { .. }))
+    {
+        return drop_data(surface, x, y, sender, &offers);
+    }
+    drop_promises(surface, x, y, promises(sender))
+}
+
+/// The types a picture dragged as its data alone may come in, most wanted
+/// first: the type, the MIME type it drops as and that type's extension
+/// (TIFF, AppKit's own, drops as PNG).
+const IMAGE_DATA: [(&str, &str, &str); 4] = [
+    ("public.png", "image/png", "png"),
+    ("public.jpeg", "image/jpeg", "jpg"),
+    ("com.compuserve.gif", "image/gif", "gif"),
+    ("public.tiff", "image/png", "png"),
+];
+
+/// What one item of a drag drops as.
+enum Offer {
+    /// A local file or directory this app can read, by its URL.
+    Uri(String),
+    /// A picture as its data (pasteboard item `item`, of type `kind`),
+    /// named after the file the item names, if any.
+    Data {
+        item: usize,
+        kind: &'static str,
+        mime: &'static str,
+        ext: &'static str,
+        name: Option<String>,
+    },
+}
+
+impl Offer {
+    fn mime(&self) -> String {
+        match self {
+            Offer::Uri(_) => String::new(),
+            Offer::Data { mime, .. } => (*mime).to_owned(),
+        }
+    }
+}
+
+/// The URLs of `offers`, when all are files to read where they are.
+fn uris_of(offers: &[Offer]) -> Option<Vec<String>> {
+    let uris = offers
+        .iter()
+        .map(|offer| match offer {
+            Offer::Uri(uri) => Some(uri.clone()),
+            Offer::Data { .. } => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!uris.is_empty()).then_some(uris)
+}
+
+/// What each item of the drag drops as: its file, when this app can read
+/// it; else the picture it carries, if any; else its file all the same
+/// (the app is told it cannot be read). Items with neither are left out.
+fn offers(sender: &ProtocolObject<dyn NSDraggingInfo>) -> Vec<Offer> {
+    let board = sender.draggingPasteboard();
+    let file = NSString::from_str("public.file-url");
+    let Some(items) = board.pasteboardItems() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let url = item
+                .stringForType(&file)
+                .and_then(|uri| NSURL::URLWithString(&uri))
+                .and_then(|url| url.filePathURL());
+            let path = url
+                .as_ref()
+                .and_then(|url| url.path())
+                .map(|path| PathBuf::from(path.to_string()));
+            let uri = item
+                .stringForType(&file)
+                .and_then(|uri| local_file_uri(&uri));
+            let readable = path
+                .as_ref()
+                .is_some_and(|path| path.is_dir() || std::fs::File::open(path).is_ok());
+            if let Some(uri) = &uri
+                && readable
+            {
+                return Some(Offer::Uri(uri.clone()));
+            }
+            let kinds = item.types();
+            let data = IMAGE_DATA
+                .iter()
+                .find(|(kind, _, _)| kinds.iter().any(|offered| offered.to_string() == *kind));
+            match data {
+                Some(&(kind, mime, ext)) => Some(Offer::Data {
+                    item: index,
+                    kind,
+                    mime,
+                    ext,
+                    name: path.as_ref().and_then(|path| {
+                        path.file_stem()
+                            .map(|stem| stem.to_string_lossy().into_owned())
+                    }),
+                }),
+                None => uri.map(Offer::Uri),
+            }
+        })
+        .collect()
+}
+
+/// Drops `offers` at `x`, `y` as their contents (`files`): pictures from
+/// their data, files read where they are (directories left out).
+fn drop_data(
+    surface: &Surface,
+    x: f32,
+    y: f32,
+    sender: &ProtocolObject<dyn NSDraggingInfo>,
+    offers: &[Offer],
+) -> bool {
+    let destination = input::file_drop_target(surface, x, y);
+    let Some(destination) = destination else {
+        clear(surface);
+        return false;
+    };
+    let items = sender.draggingPasteboard().pasteboardItems();
+    let request = FilePickRequest::new(true, 0);
+    let mut files = Vec::new();
+    for (n, offer) in offers.iter().enumerate() {
+        match offer {
+            Offer::Uri(uri) => {
+                let path = NSURL::URLWithString(&NSString::from_str(uri))
+                    .and_then(|url| url.path())
+                    .map(|path| PathBuf::from(path.to_string()));
+                if let Some(path) = path.filter(|path| !path.is_dir()) {
+                    files.extend(read_picked_files(&[path], &request));
+                }
+            }
+            Offer::Data {
+                item,
+                kind,
+                mime,
+                ext,
+                name,
+            } => {
+                let data = items
+                    .as_ref()
+                    .and_then(|items| items.iter().nth(*item))
+                    .and_then(|item| item.dataForType(&NSString::from_str(kind)))
+                    .map(|data| data.to_vec());
+                let data = match (*kind, data) {
+                    ("public.tiff", Some(tiff)) => png_of(&tiff),
+                    (_, data) => data,
+                };
+                let Some(data) = data else { continue };
+                let stem = name.clone().unwrap_or_else(|| format!("image-{}", n + 1));
+                files.push(PickedFile::new(
+                    format!("{stem}.{ext}"),
+                    *mime,
+                    nsh_core::image::ImageData::from(data),
+                ));
+            }
+        }
+    }
+    let files = finish_files(&request, files);
+    clear(surface);
+    if files.is_empty() {
+        return false;
+    }
+    let mime_types = files.iter().map(|file| file.mime.clone()).collect();
+    let contents = FileContents::new(files, mime_types, Some(point(Points(x), Points(y))));
+    surface.event(
+        destination.id(),
+        EventKind::FileDrop,
+        EventPayload::FileContents(Box::new(contents)),
+    );
+    true
+}
+
+/// A TIFF picture (AppKit's own pasteboard picture) as a PNG.
+fn png_of(tiff: &[u8]) -> Option<Vec<u8>> {
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey};
+    use objc2_foundation::NSData;
+    let rep = NSBitmapImageRep::imageRepWithData(&NSData::with_bytes(tiff))?;
+    let properties = NSDictionary::<NSBitmapImageRepPropertyKey, AnyObject>::new();
+    // SAFETY: an empty property dictionary is valid for PNG.
+    let png =
+        unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &properties) };
+    png.map(|data| data.to_vec())
 }
 
 /// Drops the files `receivers` promise at `x`, `y` on the view there that
@@ -470,7 +676,7 @@ pub(crate) fn text_entered(
     surface: &Surface,
     sender: &ProtocolObject<dyn NSDraggingInfo>,
 ) -> Option<NSDragOperation> {
-    Some(begin(surface, sender)).filter(|operation| *operation == NSDragOperation::Copy)
+    Some(begin(surface, sender)).filter(|operation| !operation.is_empty())
 }
 
 /// A drag moving over an input's text view: [`text_entered`].
@@ -481,7 +687,7 @@ pub(crate) fn text_updated(
     if !offered(surface) {
         return None;
     }
-    Some(update(surface, sender)).filter(|operation| *operation == NSDragOperation::Copy)
+    Some(update(surface, sender)).filter(|operation| !operation.is_empty())
 }
 
 /// A drop on an input's text view: whether the target around it took the
@@ -491,21 +697,6 @@ pub(crate) fn text_performed(
     sender: &ProtocolObject<dyn NSDraggingInfo>,
 ) -> Option<bool> {
     (offered(surface) && target(surface, sender).is_some()).then(|| perform(surface, sender))
-}
-
-fn read_uris(sender: &ProtocolObject<dyn NSDraggingInfo>) -> Vec<String> {
-    let board = sender.draggingPasteboard();
-    let kind = NSString::from_str("public.file-url");
-    board
-        .pasteboardItems()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.stringForType(&kind))
-                .filter_map(|uri| local_file_uri(&uri))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
 }
 
 /// The `file:` URL with the path of the local file or directory `uri`
