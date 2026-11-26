@@ -473,6 +473,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "NSParagraphStyle",
   "NSPasteboard",
   "NSPasteboardItem",
+  "NSFilePromiseReceiver",
   "NSProgressIndicator",
   "NSResponder",
   "NSRunningApplication",
