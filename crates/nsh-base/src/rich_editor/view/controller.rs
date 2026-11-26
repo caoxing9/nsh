@@ -635,7 +635,9 @@ impl Rv {
                 None => set,
             };
             let prefix = common_prefix(&base, text);
-            let deleted = base[prefix..].chars().count();
+            // The editor's Backspace deletes a grapheme: one per grapheme
+            // the platform deleted (`👍🏽` is two characters, one grapheme).
+            let deleted = base[prefix..].graphemes(true).count();
             let inserted = text[prefix..].to_owned();
             sink.text = text.to_owned();
             (deleted, inserted, sink.composition.is_some())
@@ -713,7 +715,10 @@ impl Rv {
             return;
         }
         let old = std::mem::replace(&mut sink.text, context.clone());
-        sink.emptied = Some(old);
+        // Kept until the platform's next report: the text it last reported,
+        // which it still holds if it drops the values set since (an edit
+        // made before they arrived), not a value set and replaced since.
+        sink.emptied.get_or_insert(old);
         drop(sink);
         self.sink_value.set(context);
     }

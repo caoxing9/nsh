@@ -453,6 +453,40 @@ fn a_cancelled_composition_in_the_sink_leaves_the_document() {
     see(&mut app, "Sel 3-3");
 }
 
+/// Where the sink holds the text before the caret (iOS, macOS), a
+/// deletion the platform makes there is replayed one Backspace per
+/// grapheme: deleting `👍🏽` (two characters) leaves the `a` before it.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+#[test]
+fn a_deletion_in_the_sink_takes_whole_graphemes() {
+    let mut app = start(paragraphs(&["a👍🏽"]));
+    focus(&mut app);
+    keys(&mut app, &["end"]);
+    see(&mut app, "Sel 6-6");
+    // The sink holds the text before the caret (on macOS its last 8 bytes,
+    // the emoji alone); the platform deletes the emoji from it.
+    let after = if cfg!(target_os = "macos") { "" } else { "a" };
+    sink_text(&mut app, after);
+    see(&mut app, &doc("a"));
+    see(&mut app, "Sel 2-2");
+}
+
+/// The text a dropped value would leave is the one the platform last
+/// reported, not a value set since: after the caret moves to the end of
+/// `你` and back, a commit of `你好` goes in whole.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+#[test]
+fn a_commit_after_two_caret_moves_goes_in_whole() {
+    let mut app = start(paragraphs(&["你"]));
+    focus(&mut app);
+    keys(&mut app, &["end"]);
+    see(&mut app, "Sel 2-2");
+    keys(&mut app, &["home"]);
+    see(&mut app, "Sel 1-1");
+    sink_text(&mut app, "你好");
+    see(&mut app, &doc("你好你"));
+}
+
 // Placeholder and read-only.
 
 #[test]
