@@ -505,6 +505,19 @@ thread_local! {
     /// The app asked to start again when its run ends
     /// ([`DesktopCommand::Restart`](nsh_core::desktop::DesktopCommand)).
     static RESTART: Cell<bool> = const { Cell::new(false) };
+    /// The window was closed in full screen with `keep_alive_on_close`: it
+    /// is ordered out once it has left full screen.
+    static HIDE_AFTER_FULL_SCREEN: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The standalone window, while the app runs.
+fn running_window() -> Option<Retained<NSWindow>> {
+    RUNNING.with(|running| {
+        running
+            .borrow()
+            .as_ref()
+            .map(|running| running.window.clone())
+    })
 }
 
 /// Hands `url`, a link the system opened the app with, to the running
@@ -607,6 +620,7 @@ define_class!(
 
         #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
         fn should_handle_reopen(&self, _app: &NSApplication, _visible: bool) -> bool {
+            HIDE_AFTER_FULL_SCREEN.set(false);
             let window = RUNNING.with(|running| {
                 running
                     .borrow()
@@ -638,9 +652,26 @@ define_class!(
                     .is_some_and(|running| running.keep_alive_on_close)
             });
             if keep_alive {
-                window.orderOut(None);
+                // Ordered out in full screen, the window would leave its
+                // full screen space behind, empty: it leaves full screen
+                // first (`windowDidExitFullScreen:`).
+                if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
+                    HIDE_AFTER_FULL_SCREEN.set(true);
+                    window.toggleFullScreen(None);
+                } else {
+                    window.orderOut(None);
+                }
             }
             !keep_alive
+        }
+
+        #[unsafe(method(windowDidExitFullScreen:))]
+        fn did_exit_full_screen(&self, _notification: &NSNotification) {
+            if HIDE_AFTER_FULL_SCREEN.replace(false)
+                && let Some(window) = running_window()
+            {
+                window.orderOut(None);
+            }
         }
 
         #[unsafe(method(windowWillClose:))]
